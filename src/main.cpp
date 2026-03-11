@@ -44,7 +44,7 @@ void CorruptFunctionBodyViaPointer(IDeneme* nesne) {
     std::uint32_t eskiDeger = *ilkInstr;
 
     // vtable'a dokunmadan, fonksiyon kodunun ilk instruction'ini bozuyoruz.
-    *ilkInstr = 0x00000000U;
+    *ilkInstr=*ilkInstr+32;
     __builtin___clear_cache(reinterpret_cast<char*>(hedefFonksiyon),
                             reinterpret_cast<char*>(hedefFonksiyon + sizeof(std::uint32_t)));
 
@@ -57,6 +57,9 @@ void CorruptFunctionBodyViaPointer(IDeneme* nesne) {
         std::cout << "[-] mprotect(PROT_READ|PROT_EXEC) basarisiz: "
                   << std::strerror(errno) << '\n';
     }
+    std::cout << "[+] Yazdir fonksiyon adresi: 0x" << std::hex
+              << reinterpret_cast<std::uintptr_t>(hedefFonksiyon) << std::dec << '\n';
+
 }
 } // namespace
 
