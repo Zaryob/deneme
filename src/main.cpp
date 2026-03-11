@@ -1,38 +1,62 @@
 #include "CDeneme.hpp"
 #include "DenemeFactory.hpp"
 
+#include <cerrno>
 #include <cstddef>
+#include <cstring>
 #include <cstdint>
 #include <iostream>
+#include <sys/mman.h>
+#include <unistd.h>
 
 namespace {
-void CorruptVirtualCall(IDeneme* nesne) {
+void CorruptFunctionBodyViaPointer(IDeneme* nesne) {
     auto** vptr = reinterpret_cast<std::uintptr_t**>(nesne);
-    std::uintptr_t* originalVTable = *vptr;
-
-    constexpr std::size_t kSlotCount = 4;
-    auto* fakeVTable = new std::uintptr_t[kSlotCount];
-    for (std::size_t i = 0; i < kSlotCount; ++i) {
-        fakeVTable[i] = originalVTable[i];
-    }
+    std::uintptr_t* vtable = *vptr;
 
     // Clang/GCC Itanium ABI'de bu sinif icin [2] genelde Yazdir slot'udur.
     constexpr std::size_t kYazdirSlot = 2;
+    auto* hedefFonksiyon = reinterpret_cast<std::uint8_t*>(vtable[kYazdirSlot]);
+
     std::cout << "[+] Orijinal vtable adresi: 0x" << std::hex
-              << reinterpret_cast<std::uintptr_t>(originalVTable) << std::dec << '\n';
-    std::cout << "[+] Kopya vtable adresi: 0x" << std::hex
-              << reinterpret_cast<std::uintptr_t>(fakeVTable) << std::dec << '\n';
-    std::cout << "[+] Yazdir slot eski adresi: 0x" << std::hex
-              << fakeVTable[kYazdirSlot] << std::dec << '\n';
+              << reinterpret_cast<std::uintptr_t>(vtable) << std::dec << '\n';
+    std::cout << "[+] Yazdir fonksiyon adresi: 0x" << std::hex
+              << reinterpret_cast<std::uintptr_t>(hedefFonksiyon) << std::dec << '\n';
 
-    // Bilerek tek bir virtual fonksiyon hedefini bozuyoruz.
-    fakeVTable[kYazdirSlot] = static_cast<std::uintptr_t>(0x1);
+    long pageSizeRaw = ::sysconf(_SC_PAGESIZE);
+    if (pageSizeRaw <= 0) {
+        std::cout << "[-] Page size okunamadi." << '\n';
+        return;
+    }
 
-    std::cout << "[+] Yazdir slot yeni adresi: 0x" << std::hex
-              << fakeVTable[kYazdirSlot] << std::dec << '\n';
+    auto pageSize = static_cast<std::uintptr_t>(pageSizeRaw);
+    auto pageStartAddr = reinterpret_cast<std::uintptr_t>(hedefFonksiyon) & ~(pageSize - 1U);
+    void* pageStart = reinterpret_cast<void*>(pageStartAddr);
 
-    // Nesneyi bozuk slot iceren kopya vtable'a yonlendir.
-    *vptr = fakeVTable;
+    if (::mprotect(pageStart, static_cast<std::size_t>(pageSize),
+                   PROT_READ | PROT_WRITE | PROT_EXEC) != 0) {
+        std::cout << "[-] mprotect(PROT_READ|PROT_WRITE|PROT_EXEC) basarisiz: "
+                  << std::strerror(errno) << '\n';
+        std::cout << "[!] Yine de fonksiyon kodunu bozmak icin yazma denenecek." << '\n';
+    }
+
+    auto* ilkInstr = reinterpret_cast<std::uint32_t*>(hedefFonksiyon);
+    std::uint32_t eskiDeger = *ilkInstr;
+
+    // vtable'a dokunmadan, fonksiyon kodunun ilk instruction'ini bozuyoruz.
+    *ilkInstr = 0x00000000U;
+    __builtin___clear_cache(reinterpret_cast<char*>(hedefFonksiyon),
+                            reinterpret_cast<char*>(hedefFonksiyon + sizeof(std::uint32_t)));
+
+    std::cout << "[+] Ilk instruction eski deger: 0x" << std::hex << eskiDeger << std::dec
+              << '\n';
+    std::cout << "[+] Ilk instruction yeni deger: 0x" << std::hex << *ilkInstr << std::dec
+              << '\n';
+
+    if (::mprotect(pageStart, static_cast<std::size_t>(pageSize), PROT_READ | PROT_EXEC) != 0) {
+        std::cout << "[-] mprotect(PROT_READ|PROT_EXEC) basarisiz: "
+                  << std::strerror(errno) << '\n';
+    }
 }
 } // namespace
 
@@ -50,9 +74,9 @@ int main() {
     nesne->Yazdir();
     std::cout << "Topla(2, 3): " << nesne->Topla(2, 3) << '\n';
 
-    CorruptVirtualCall(nesne);
+    CorruptFunctionBodyViaPointer(nesne);
 
-    std::cout << "[!] Simdi tek bir bozuk virtual slot ile fonksiyon cagrilacak..." << '\n';
+    std::cout << "[!] Simdi vtable ayni, ama Yazdir kodu bozuk halde cagrilacak..." << '\n';
     nesne->Yazdir(); // Muhtemelen bu satirda crash olur.
 
     delete nesne;
